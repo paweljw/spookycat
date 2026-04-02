@@ -1,6 +1,6 @@
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".config" / "lol.pjw.spookycat"
@@ -8,40 +8,56 @@ CONFIG_FILE = CONFIG_DIR / "spookycat.toml"
 
 SAMPLE_CONFIG = """\
 # SpookyCat — Stream Deck Mini configuration
-# Each [[tabs]] entry maps a Stream Deck key (0-5) to a Ghostty tab.
-#
-# icon: displayed on the button — unicode char, emoji, or short string (1-3 chars)
-# init: shell commands to run when the tab is first created
+
+[settings]
+poll_interval = 5  # seconds between workspace state polls
+
+[colors]
+inactive = "#000000"   # no Claude running (black)
+working = "#2980b9"    # Claude is processing (blue)
+done = "#27ae60"       # Claude finished (green)
+asking = "#c0392b"     # Claude needs attention (red)
+
+# Each [[tabs]] maps a Stream Deck key (0-5) to a Ghostty tab.
+# workspace: directory to cd into on tab creation (required)
+# icon: shown on button — unicode char, emoji, or short string (1-3 chars)
+# init: commands to run AFTER cd to workspace (optional, default [])
 
 [[tabs]]
 key = 0
 icon = "α"
-init = ["echo 'Tab 1 ready'"]
+workspace = "~/projects/alpha"
+init = ["echo 'ready'"]
 
 [[tabs]]
 key = 1
 icon = "β"
-init = ["echo 'Tab 2 ready'"]
+workspace = "~/projects/beta"
+init = []
 
 [[tabs]]
 key = 2
 icon = "γ"
-init = ["echo 'Tab 3 ready'"]
+workspace = "~/projects/gamma"
+init = []
 
 [[tabs]]
 key = 3
 icon = "δ"
-init = ["echo 'Tab 4 ready'"]
+workspace = "~/projects/delta"
+init = []
 
 [[tabs]]
 key = 4
 icon = "ε"
-init = ["echo 'Tab 5 ready'"]
+workspace = "~/projects/epsilon"
+init = []
 
 [[tabs]]
 key = 5
 icon = "ζ"
-init = ["echo 'Tab 6 ready'"]
+workspace = "~/projects/zeta"
+init = []
 """
 
 
@@ -49,10 +65,26 @@ init = ["echo 'Tab 6 ready'"]
 class TabConfig:
     key: int
     icon: str
+    workspace: Path
     init: list[str]
 
 
-def load_config() -> list[TabConfig]:
+@dataclass
+class Colors:
+    inactive: str = "#000000"
+    working: str = "#2980b9"
+    done: str = "#27ae60"
+    asking: str = "#c0392b"
+
+
+@dataclass
+class SpookyCatConfig:
+    tabs: list[TabConfig]
+    colors: Colors = field(default_factory=Colors)
+    poll_interval: int = 5
+
+
+def load_config() -> SpookyCatConfig:
     if not CONFIG_FILE.exists():
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(SAMPLE_CONFIG)
@@ -62,6 +94,17 @@ def load_config() -> list[TabConfig]:
 
     with CONFIG_FILE.open("rb") as f:
         raw = tomllib.load(f)
+
+    settings = raw.get("settings", {})
+    poll_interval = settings.get("poll_interval", 5)
+
+    colors_raw = raw.get("colors", {})
+    colors = Colors(
+        inactive=colors_raw.get("inactive", Colors.inactive),
+        working=colors_raw.get("working", Colors.working),
+        done=colors_raw.get("done", Colors.done),
+        asking=colors_raw.get("asking", Colors.asking),
+    )
 
     tabs_raw = raw.get("tabs", [])
     if not tabs_raw:
@@ -83,13 +126,23 @@ def load_config() -> list[TabConfig]:
             sys.exit(1)
         seen_keys.add(key)
 
-        icon = entry.get("icon", "?")
-        init_cmds = entry.get("init", [])
-        if not isinstance(init_cmds, list):
-            print(f"Error: 'init' for key {key} must be an array")
+        workspace_str = entry.get("workspace")
+        if not workspace_str:
+            print(f"Error: tab {key} missing 'workspace'")
             sys.exit(1)
 
-        tabs.append(TabConfig(key=key, icon=icon, init=init_cmds))
+        tabs.append(
+            TabConfig(
+                key=key,
+                icon=entry.get("icon", "?"),
+                workspace=Path(workspace_str).expanduser().resolve(),
+                init=entry.get("init", []),
+            )
+        )
 
     tabs.sort(key=lambda t: t.key)
-    return tabs
+    return SpookyCatConfig(tabs=tabs, colors=colors, poll_interval=poll_interval)
+
+
+def print_sample_config():
+    print(SAMPLE_CONFIG)

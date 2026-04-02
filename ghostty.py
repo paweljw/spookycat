@@ -1,5 +1,6 @@
 import contextlib
 import json
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -125,6 +126,9 @@ class GhosttyController:
         )
         self._osascript(script, timeout=30)
 
+    def _tab_init(self, tab):
+        return [f"cd {shlex.quote(str(tab.workspace))}", *tab.init]
+
     def _create_window(self):
         subprocess.run(["open", "-a", "Ghostty"], check=True)
         time.sleep(0.5)
@@ -135,7 +139,7 @@ class GhosttyController:
         )
         time.sleep(0.5)
 
-        self._type_commands(self.tabs[0].init)
+        self._type_commands(self._tab_init(self.tabs[0]))
         time.sleep(0.3)
 
         for tab in self.tabs[1:]:
@@ -144,7 +148,7 @@ class GhosttyController:
                 'keystroke "t" using command down'
             )
             time.sleep(0.3)
-            self._type_commands(tab.init)
+            self._type_commands(self._tab_init(tab))
             time.sleep(0.3)
 
         self.switch_tab(0)
