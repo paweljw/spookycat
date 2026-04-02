@@ -1,5 +1,6 @@
 import atexit
 import logging
+import os
 import shutil
 import signal
 import sys
@@ -151,11 +152,64 @@ class DeckController:
                     if self.ready:
                         self._redraw()
 
+    def set_workspace(self, key, icon, workspace):
+        with self._lock:
+            if key not in self.key_to_tab:
+                log.warning("set-workspace: key %d not configured", key)
+                return
+            idx, old_tab = self.key_to_tab[key]
+            old_ws = str(old_tab.workspace)
+
+            del self.ws_to_key[old_ws]
+            self.claude_states.pop(old_ws, None)
+            self.subtitles.pop(old_ws, None)
+
+            from config import TabConfig
+
+            new_tab = TabConfig(key=key, icon=icon, workspace=workspace, init=[])
+            self.config.tabs[idx] = new_tab
+            self.key_to_tab[key] = (idx, new_tab)
+            self.ws_to_key[str(workspace)] = key
+
+            log.info("key %d: %s → %s (%s)", key, old_tab.icon, icon, workspace)
+            if self.ready:
+                self._redraw()
+
     def _resolve_workspace(self, cwd_path):
         for tab in self.config.tabs:
             if cwd_path == tab.workspace or tab.workspace in cwd_path.parents:
                 return str(tab.workspace)
         return None
+
+
+def handle_command(msg, ctrl, poller):
+    cmd = msg.get("command")
+    if cmd == "set-workspace":
+        key = msg.get("key")
+        icon = msg.get("icon", "?")
+        workspace = Path(msg.get("workspace", "")).expanduser().resolve()
+        ctrl.set_workspace(key, icon, workspace)
+        poller.workspaces = [tab.workspace for tab in ctrl.config.tabs]
+    else:
+        log.warning("Unknown command: %s", cmd)
+
+
+def send_command(msg):
+    """Send a command to the running SpookyCat instance via socket."""
+    import json
+    import socket as sock
+
+    from hooks import SOCKET_PATH
+
+    try:
+        s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect(SOCKET_PATH)
+        s.sendall(json.dumps(msg).encode() + b"\n")
+        s.close()
+    except OSError:
+        print("SpookyCat is not running.")
+        sys.exit(1)
 
 
 def run(log_level):
@@ -192,7 +246,13 @@ def run(log_level):
 
     ctrl = DeckController(deck, config)
 
-    server = StateServer(on_event=ctrl.on_hook_event)
+    def on_socket_event(msg):
+        if "command" in msg:
+            handle_command(msg, ctrl, poller)
+        else:
+            ctrl.on_hook_event(msg)
+
+    server = StateServer(on_event=on_socket_event)
     server.start()
     log.info("Socket server listening")
 
@@ -311,6 +371,57 @@ def uninstall_app():
         print("SpookyCat.app not found in ~/Applications.")
 
 
+CLI_PATH = Path.home() / ".local" / "bin" / "spookycat"
+
+
+def install_cli():
+    project_dir = Path(__file__).parent.resolve()
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        print("Error: uv not found in PATH")
+        sys.exit(1)
+
+    CLI_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CLI_PATH.write_text(
+        f'#!/bin/bash\ncd "{project_dir}"\nexec "{uv_path}" run python main.py "$@"\n'
+    )
+    CLI_PATH.chmod(0o755)
+    print(f"Installed CLI to {CLI_PATH}")
+    if str(CLI_PATH.parent) not in os.environ.get("PATH", ""):
+        print(f"  Note: add {CLI_PATH.parent} to your PATH if not already there")
+
+
+def uninstall_cli():
+    if CLI_PATH.exists():
+        CLI_PATH.unlink()
+        print(f"Removed {CLI_PATH}")
+    else:
+        print(f"CLI not found at {CLI_PATH}")
+
+
+def cmd_set_workspace(args):
+    if len(args) < 3:
+        print("Usage: spookycat set-workspace KEY ICON WORKSPACE_DIR")
+        sys.exit(1)
+    try:
+        key = int(args[0])
+    except ValueError:
+        print(f"Error: KEY must be integer 0-5, got '{args[0]}'")
+        sys.exit(1)
+    if not 0 <= key <= 5:
+        print(f"Error: KEY must be 0-5, got {key}")
+        sys.exit(1)
+    send_command(
+        {
+            "command": "set-workspace",
+            "key": key,
+            "icon": args[1],
+            "workspace": args[2],
+        }
+    )
+    print(f"Key {key}: icon={args[1]} workspace={args[2]}")
+
+
 def main():
     log_level = "info"
     args = sys.argv[1:]
@@ -324,19 +435,24 @@ def main():
 
     if filtered:
         cmd = filtered[0]
-        commands = {
+        simple_commands = {
             "install-hooks": install_hooks,
             "uninstall-hooks": uninstall_hooks,
             "install-app": install_app,
             "uninstall-app": uninstall_app,
+            "install-cli": install_cli,
+            "uninstall-cli": uninstall_cli,
             "print-sample-config": print_sample_config,
         }
-        if cmd in commands:
-            commands[cmd]()
+        if cmd in simple_commands:
+            simple_commands[cmd]()
+        elif cmd == "set-workspace":
+            cmd_set_workspace(filtered[1:])
         else:
             print(f"Unknown command: {cmd}")
             print("Commands: install-hooks, uninstall-hooks, install-app,")
-            print("         uninstall-app, print-sample-config")
+            print("  uninstall-app, install-cli, uninstall-cli,")
+            print("  print-sample-config, set-workspace KEY ICON DIR")
             sys.exit(1)
         return
 
