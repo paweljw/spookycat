@@ -1,4 +1,7 @@
+import atexit
 import logging
+import shutil
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -19,6 +22,8 @@ COLS, ROWS = 3, 2
 
 FONT_REGULAR = "/System/Library/Fonts/Helvetica.ttc"
 FONT_BOLD_INDEX = 1
+
+APP_DIR = Path.home() / "Applications" / "SpookyCat.app"
 
 
 def show_splash(deck):
@@ -138,7 +143,11 @@ class DeckController:
                 old = self.subtitles.get(workspace_str)
                 if old != value:
                     self.subtitles[workspace_str] = value
-                    log.debug("subtitle %s: %s", self.ws_to_key.get(workspace_str, "?"), value)
+                    log.debug(
+                        "subtitle %s: %s",
+                        self.ws_to_key.get(workspace_str, "?"),
+                        value,
+                    )
                     if self.ready:
                         self._redraw()
 
@@ -150,6 +159,8 @@ class DeckController:
 
 
 def run(log_level):
+    import rumps
+
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(message)s",
@@ -216,20 +227,88 @@ def run(log_level):
 
     deck.set_key_callback(on_key_change)
 
-    log.info("SpookyCat ready! Ctrl+C to exit.")
+    cleaned_up = threading.Event()
 
-    stop_event = threading.Event()
-    try:
-        stop_event.wait()
-    except KeyboardInterrupt:
-        pass
-    finally:
+    def cleanup():
+        if cleaned_up.is_set():
+            return
+        cleaned_up.set()
         poller.stop()
         server.stop()
         ghostty.close()
         deck.reset()
         deck.close()
         log.info("SpookyCat closed.")
+
+    atexit.register(cleanup)
+
+    class SpookyCatMenuBar(rumps.App):
+        def __init__(self):
+            super().__init__("👻🐱", quit_button=None)
+            self.menu = [rumps.MenuItem("Quit SpookyCat", callback=self._quit)]
+
+        def _quit(self, _):
+            cleanup()
+            rumps.quit_application()
+
+    app = SpookyCatMenuBar()
+
+    def sigint_handler(sig, frame):
+        cleanup()
+        rumps.quit_application()
+
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    log.info("SpookyCat ready!")
+    app.run()
+
+
+def install_app():
+    project_dir = Path(__file__).parent.resolve()
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        print("Error: uv not found in PATH")
+        sys.exit(1)
+
+    contents = APP_DIR / "Contents"
+    macos = contents / "MacOS"
+    macos.mkdir(parents=True, exist_ok=True)
+
+    exe = macos / "SpookyCat"
+    exe.write_text(f'#!/bin/bash\ncd "{project_dir}"\nexec "{uv_path}" run python main.py\n')
+    exe.chmod(0o755)
+
+    plist = contents / "Info.plist"
+    plist.write_text("""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"\
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>SpookyCat</string>
+    <key>CFBundleIdentifier</key>
+    <string>lol.pjw.spookycat</string>
+    <key>CFBundleName</key>
+    <string>SpookyCat</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+""")
+
+    print(f"Installed to {APP_DIR}")
+    print("Launch from Raycast/Spotlight — look for 'SpookyCat'.")
+
+
+def uninstall_app():
+    if APP_DIR.exists():
+        shutil.rmtree(APP_DIR)
+        print(f"Removed {APP_DIR}")
+    else:
+        print("SpookyCat.app not found in ~/Applications.")
 
 
 def main():
@@ -245,15 +324,19 @@ def main():
 
     if filtered:
         cmd = filtered[0]
-        if cmd == "install-hooks":
-            install_hooks()
-        elif cmd == "uninstall-hooks":
-            uninstall_hooks()
-        elif cmd == "print-sample-config":
-            print_sample_config()
+        commands = {
+            "install-hooks": install_hooks,
+            "uninstall-hooks": uninstall_hooks,
+            "install-app": install_app,
+            "uninstall-app": uninstall_app,
+            "print-sample-config": print_sample_config,
+        }
+        if cmd in commands:
+            commands[cmd]()
         else:
             print(f"Unknown command: {cmd}")
-            print("Usage: spookycat [--log-level=debug] [install-hooks | uninstall-hooks | ...]")
+            print("Commands: install-hooks, uninstall-hooks, install-app,")
+            print("         uninstall-app, print-sample-config")
             sys.exit(1)
         return
 
