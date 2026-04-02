@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 import threading
 
@@ -101,6 +102,56 @@ def invalidate_claude_cache():
     global _claude_cwds_cache
     with _claude_cwds_lock:
         _claude_cwds_cache = None
+
+
+MAX_SUBTITLE = 7
+TICKET_RE = re.compile(r"^([a-zA-Z]+-\d+)")
+
+
+def _format_branch(branch):
+    """Format a git branch name into a short subtitle."""
+    if "/" in branch:
+        branch = branch.split("/", 1)[1]
+
+    ticket = TICKET_RE.match(branch)
+    if ticket:
+        return ticket.group(1).upper()
+
+    if len(branch) <= MAX_SUBTITLE:
+        return branch
+    return branch[: MAX_SUBTITLE - 1] + "~"
+
+
+def check_git_branch(workspace):
+    """Get the current git branch or short SHA for a workspace."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    branch = result.stdout.strip()
+
+    if branch == "HEAD":
+        try:
+            sha = subprocess.run(
+                ["git", "-C", str(workspace), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return {"git_subtitle": sha.stdout.strip()[:MAX_SUBTITLE]}
+        except Exception:
+            return {"git_subtitle": "detach"}
+
+    return {"git_subtitle": _format_branch(branch)}
 
 
 def check_claude_process(workspace):

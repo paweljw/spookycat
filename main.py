@@ -10,13 +10,12 @@ from StreamDeck.ImageHelpers import PILHelper
 from config import SpookyCatConfig, load_config, print_sample_config
 from ghostty import GhosttyController
 from hooks import StateServer, install_hooks, uninstall_hooks
-from poller import Poller, check_claude_process, invalidate_claude_cache
+from poller import Poller, check_claude_process, check_git_branch, invalidate_claude_cache
 
 log = logging.getLogger("spookycat")
 
 SPLASH_PATH = Path(__file__).parent / "splash.png"
 COLS, ROWS = 3, 2
-SUBTITLE = "T-123456"
 
 FONT_REGULAR = "/System/Library/Fonts/Helvetica.ttc"
 FONT_BOLD_INDEX = 1
@@ -41,7 +40,7 @@ def render_key_image(deck, icon, subtitle="", bg_color="black", text_color="whit
 
     try:
         icon_font = ImageFont.truetype(FONT_REGULAR, 24, index=FONT_BOLD_INDEX if bold else 0)
-        sub_font = ImageFont.truetype(FONT_REGULAR, 10)
+        sub_font = ImageFont.truetype("/System/Library/Fonts/Menlo.ttc", 11)
     except OSError:
         icon_font = ImageFont.load_default()
         sub_font = icon_font
@@ -66,6 +65,7 @@ class DeckController:
         self.ws_to_key = {str(tab.workspace): tab.key for tab in config.tabs}
         self.active_key = config.tabs[0].key
         self.claude_states = {}
+        self.subtitles = {}
         self.ready = False
         self._lock = threading.Lock()
 
@@ -97,10 +97,11 @@ class DeckController:
                 self.deck.set_key_image(key, PILHelper.to_native_format(self.deck, blank))
                 continue
             _idx, tab = self.key_to_tab[key]
+            subtitle = self.subtitles.get(str(tab.workspace), "")
             image = render_key_image(
                 self.deck,
                 tab.icon,
-                SUBTITLE,
+                subtitle,
                 bg_color=self._bg_color(key),
                 bold=(key == self.active_key),
             )
@@ -126,13 +127,20 @@ class DeckController:
 
     def on_poll_update(self, workspace, key, value):
         workspace_str = str(workspace)
-        if key != "claude_running":
-            return
-        current = self.claude_states.get(workspace_str, "inactive")
-        if value and current == "inactive":
-            self.update_claude_state(workspace_str, "done")
-        elif not value and current != "inactive":
-            self.update_claude_state(workspace_str, "inactive")
+        if key == "claude_running":
+            current = self.claude_states.get(workspace_str, "inactive")
+            if value and current == "inactive":
+                self.update_claude_state(workspace_str, "done")
+            elif not value and current != "inactive":
+                self.update_claude_state(workspace_str, "inactive")
+        elif key == "git_subtitle":
+            with self._lock:
+                old = self.subtitles.get(workspace_str)
+                if old != value:
+                    self.subtitles[workspace_str] = value
+                    log.debug("subtitle %s: %s", self.ws_to_key.get(workspace_str, "?"), value)
+                    if self.ready:
+                        self._redraw()
 
     def _resolve_workspace(self, cwd_path):
         for tab in self.config.tabs:
@@ -184,6 +192,7 @@ def run(log_level):
     )
     poller.pre_cycle_hooks.append(invalidate_claude_cache)
     poller.register(check_claude_process)
+    poller.register(check_git_branch)
     poller.start()
     log.info("Poller started (interval: %ds)", config.poll_interval)
 
