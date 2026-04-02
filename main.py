@@ -236,7 +236,7 @@ def run(log_level):
         poller.stop()
         server.stop()
         ghostty.close()
-        deck.reset()
+        deck.set_brightness(0)
         deck.close()
         log.info("SpookyCat closed.")
 
