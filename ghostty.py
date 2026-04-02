@@ -64,9 +64,10 @@ end tell
 
 
 class GhosttyController:
-    TAB_COUNT = 6
+    def __init__(self, tabs):
+        self.tabs = tabs
+        self.tab_count = len(tabs)
 
-    def __init__(self):
         if self._find_window():
             print("  Re-attached to existing Ghostty window")
             self._save_state()
@@ -84,17 +85,17 @@ class GhosttyController:
 
     def _save_state(self):
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps({"tab_count": self.TAB_COUNT}))
+        STATE_FILE.write_text(json.dumps({"tab_count": self.tab_count}))
 
     def _clear_state(self):
         STATE_FILE.unlink(missing_ok=True)
 
-    def _osascript(self, script):
+    def _osascript(self, script, timeout=10):
         result = subprocess.run(
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
         )
         if result.returncode != 0:
             raise RuntimeError(f"osascript failed: {result.stderr.strip()}")
@@ -102,10 +103,27 @@ class GhosttyController:
 
     def _find_window(self):
         try:
-            title = self._osascript(FIND_WINDOW_SCRIPT.format(tab_count=self.TAB_COUNT))
+            title = self._osascript(FIND_WINDOW_SCRIPT.format(tab_count=self.tab_count))
             return bool(title)
         except RuntimeError:
             return False
+
+    def _type_commands(self, commands):
+        if not commands:
+            return
+        lines = []
+        for cmd in commands:
+            escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
+            lines.append(f'        keystroke "{escaped}"')
+            lines.append("        keystroke return")
+            lines.append("        delay 0.3")
+        script = (
+            'tell application "System Events"\n'
+            '    tell process "Ghostty"\n' + "\n".join(lines) + "\n"
+            "    end tell\n"
+            "end tell"
+        )
+        self._osascript(script, timeout=30)
 
     def _create_window(self):
         subprocess.run(["open", "-a", "Ghostty"], check=True)
@@ -117,23 +135,28 @@ class GhosttyController:
         )
         time.sleep(0.5)
 
-        for _ in range(self.TAB_COUNT - 1):
+        self._type_commands(self.tabs[0].init)
+        time.sleep(0.3)
+
+        for tab in self.tabs[1:]:
             self._osascript(
                 'tell application "System Events" to tell process "Ghostty" to '
                 'keystroke "t" using command down'
             )
             time.sleep(0.3)
+            self._type_commands(tab.init)
+            time.sleep(0.3)
 
         self.switch_tab(0)
         self._save_state()
-        print(f"  Created {self.TAB_COUNT} tabs in new Ghostty window")
+        print(f"  Created {self.tab_count} tabs in new Ghostty window")
 
     def switch_tab(self, index):
-        if not 0 <= index < self.TAB_COUNT:
+        if not 0 <= index < self.tab_count:
             return
-        self._osascript(SWITCH_TAB_SCRIPT.format(tab_count=self.TAB_COUNT, tab_index=index + 1))
+        self._osascript(SWITCH_TAB_SCRIPT.format(tab_count=self.tab_count, tab_index=index + 1))
 
     def close(self):
         with contextlib.suppress(RuntimeError):
-            self._osascript(CLOSE_WINDOW_SCRIPT.format(tab_count=self.TAB_COUNT))
+            self._osascript(CLOSE_WINDOW_SCRIPT.format(tab_count=self.tab_count))
         self._clear_state()

@@ -1,46 +1,60 @@
 import threading
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.ImageHelpers import PILHelper
 
+from config import load_config
 from ghostty import GhosttyController
 
 COLORS = ["#e74c3c", "#2ecc71", "#3498db", "#f39c12", "#9b59b6", "#1abc9c"]
+SUBTITLE = "T-123456"
+SPLASH_PATH = Path(__file__).parent / "splash.png"
+COLS, ROWS = 3, 2
 
 
-def render_key_image(deck, text, bg_color="black", text_color="white"):
+def show_splash(deck):
+    key_w, key_h = deck.key_image_format()["size"]
+    canvas_w, canvas_h = key_w * COLS, key_h * ROWS
+
+    splash = Image.open(SPLASH_PATH).convert("RGB")
+    splash = splash.resize((canvas_w, canvas_h), Image.LANCZOS)
+
+    for key in range(deck.key_count()):
+        col = key % COLS
+        row = key // COLS
+        tile = splash.crop((col * key_w, row * key_h, (col + 1) * key_w, (row + 1) * key_h))
+        deck.set_key_image(key, PILHelper.to_native_format(deck, tile))
+
+
+def render_key_image(deck, icon, subtitle="", bg_color="black", text_color="white"):
     image = Image.new("RGB", deck.key_image_format()["size"], bg_color)
     draw = ImageDraw.Draw(image)
 
     try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 14)
+        icon_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 24)
+        sub_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
     except OSError:
-        font = ImageFont.load_default()
+        icon_font = ImageFont.load_default()
+        sub_font = icon_font
 
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (image.width - text_w) // 2
-    y = (image.height - text_h) // 2
-    draw.text((x, y), text, font=font, fill=text_color)
+    bbox = draw.textbbox((0, 0), icon, font=icon_font)
+    icon_w = bbox[2] - bbox[0]
+    draw.text(((image.width - icon_w) // 2, 14), icon, font=icon_font, fill=text_color)
+
+    if subtitle:
+        bbox = draw.textbbox((0, 0), subtitle, font=sub_font)
+        sub_w = bbox[2] - bbox[0]
+        draw.text(((image.width - sub_w) // 2, 52), subtitle, font=sub_font, fill=text_color)
 
     return image
 
 
-def set_key(deck, key, text, bg_color="black"):
-    image = render_key_image(deck, text, bg_color=bg_color)
-    deck.set_key_image(key, PILHelper.to_native_format(deck, image))
-
-
-def update_active_tab(deck, active_key):
-    for key in range(deck.key_count()):
-        if key == active_key:
-            set_key(deck, key, f"T{key + 1}", bg_color=COLORS[key])
-        else:
-            set_key(deck, key, f"T{key + 1}")
-
-
 def main():
+    tabs = load_config()
+    key_to_tab = {tab.key: (i, tab) for i, tab in enumerate(tabs)}
+
     decks = DeviceManager().enumerate()
     print(f"Found {len(decks)} Stream Deck(s)")
 
@@ -58,18 +72,31 @@ def main():
     print(f"  Key count:    {deck.key_count()}")
 
     deck.set_brightness(60)
+    show_splash(deck)
 
     print("Setting up Ghostty...")
-    ghostty = GhosttyController()
+    ghostty = GhosttyController(tabs)
 
-    update_active_tab(deck, 0)
+    def update_buttons(active_key):
+        for key in range(deck.key_count()):
+            if key not in key_to_tab:
+                blank = Image.new("RGB", deck.key_image_format()["size"], "black")
+                deck.set_key_image(key, PILHelper.to_native_format(deck, blank))
+                continue
+            _idx, tab = key_to_tab[key]
+            bg = COLORS[key % len(COLORS)] if key == active_key else "black"
+            image = render_key_image(deck, tab.icon, SUBTITLE, bg_color=bg)
+            deck.set_key_image(key, PILHelper.to_native_format(deck, image))
+
+    update_buttons(tabs[0].key)
 
     def on_key_change(deck, key, pressed):
-        if not pressed:
+        if not pressed or key not in key_to_tab:
             return
-        print(f"Switching to tab {key + 1}")
-        ghostty.switch_tab(key)
-        update_active_tab(deck, key)
+        tab_index, _tab = key_to_tab[key]
+        print(f"Switching to tab {tab_index + 1} (key {key})")
+        ghostty.switch_tab(tab_index)
+        update_buttons(key)
 
     deck.set_key_callback(on_key_change)
 
