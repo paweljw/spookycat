@@ -73,6 +73,7 @@ class DeckController:
         self.claude_states = {}
         self.subtitles = {}
         self.ready = False
+        self.connected = True
         self._lock = threading.Lock()
 
     def set_active(self, key):
@@ -95,12 +96,28 @@ class DeckController:
         state = self.claude_states.get(str(tab.workspace), "inactive")
         return getattr(self.config.colors, state)
 
+    def _deck_op(self, fn):
+        try:
+            fn()
+            if not self.connected:
+                self.connected = True
+                log.info("Stream Deck reconnected")
+        except Exception:
+            if self.connected:
+                self.connected = False
+                log.warning("Stream Deck disconnected")
+
     def _redraw(self):
-        fmt = self.deck.key_image_format()
+        if not self.connected:
+            return
         for key in range(self.deck.key_count()):
             if key not in self.key_to_tab:
-                blank = Image.new("RGB", fmt["size"], "black")
-                self.deck.set_key_image(key, PILHelper.to_native_format(self.deck, blank))
+                blank = Image.new("RGB", self.deck.key_image_format()["size"], "black")
+                self._deck_op(
+                    lambda k=key, b=blank: self.deck.set_key_image(
+                        k, PILHelper.to_native_format(self.deck, b)
+                    )
+                )
                 continue
             _idx, tab = self.key_to_tab[key]
             subtitle = self.subtitles.get(str(tab.workspace), "")
@@ -111,7 +128,33 @@ class DeckController:
                 bg_color=self._bg_color(key),
                 bold=(key == self.active_key),
             )
-            self.deck.set_key_image(key, PILHelper.to_native_format(self.deck, image))
+            self._deck_op(
+                lambda k=key, img=image: self.deck.set_key_image(
+                    k, PILHelper.to_native_format(self.deck, img)
+                )
+            )
+
+    def try_reconnect(self):
+        if self.connected:
+            try:
+                self.deck.get_serial_number()
+                return
+            except Exception:
+                self.connected = False
+                log.warning("Stream Deck disconnected")
+        decks = DeviceManager().enumerate()
+        if not decks:
+            return
+        try:
+            self.deck = decks[0]
+            self.deck.open()
+            self.deck.set_brightness(60)
+            self.connected = True
+            log.info("Stream Deck reconnected")
+            self._redraw()
+            self.deck.set_key_callback(self._key_callback)
+        except Exception:
+            pass
 
     def on_hook_event(self, msg):
         cwd = msg.get("cwd", "")
@@ -285,7 +328,9 @@ def run(log_level):
             ghostty.switch_tab(tab_index)
             ctrl.set_active(key)
 
+    ctrl._key_callback = on_key_change
     deck.set_key_callback(on_key_change)
+    poller.pre_cycle_hooks.append(ctrl.try_reconnect)
 
     cleaned_up = threading.Event()
 
@@ -296,8 +341,12 @@ def run(log_level):
         poller.stop()
         server.stop()
         ghostty.close()
-        deck.set_brightness(0)
-        deck.close()
+        if ctrl.connected:
+            try:
+                ctrl.deck.set_brightness(0)
+                ctrl.deck.close()
+            except Exception:
+                pass
         log.info("SpookyCat closed.")
 
     atexit.register(cleanup)

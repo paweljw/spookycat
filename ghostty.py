@@ -27,9 +27,9 @@ end tell
 """
 
 SWITCH_TAB_SCRIPT = """
-tell application "Ghostty" to activate
 tell application "System Events"
     tell process "Ghostty"
+        set frontmost to true
         repeat with w in every window
             try
                 set tabBar to tab group "tab bar" of w
@@ -161,7 +161,10 @@ class GhosttyController:
     def switch_tab(self, index):
         if not 0 <= index < self.tab_count:
             return
-        self._osascript(SWITCH_TAB_SCRIPT.format(tab_count=self.tab_count, tab_index=index + 1))
+        result = self._osascript(
+            SWITCH_TAB_SCRIPT.format(tab_count=self.tab_count, tab_index=index + 1)
+        )
+        log.debug("switch_tab(%d) → %s", index, result)
 
     def is_focused(self):
         try:
