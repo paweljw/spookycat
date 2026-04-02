@@ -163,6 +163,28 @@ class GhosttyController:
             return
         self._osascript(SWITCH_TAB_SCRIPT.format(tab_count=self.tab_count, tab_index=index + 1))
 
+    def is_focused(self):
+        try:
+            result = self._osascript(f"""
+tell application "System Events"
+    if not (frontmost of process "Ghostty") then return "no"
+    tell process "Ghostty"
+        try
+            set tabBar to tab group "tab bar" of window 1
+            if (count of radio buttons of tabBar) is {self.tab_count} then
+                return "yes"
+            end if
+        end try
+    end tell
+    return "no"
+end tell""")
+            return result == "yes"
+        except RuntimeError:
+            return False
+
+    def switch_away(self):
+        self._osascript('tell application "System Events" to key code 50 using command down')
+
     def close(self):
         with contextlib.suppress(RuntimeError):
             self._osascript(CLOSE_WINDOW_SCRIPT.format(tab_count=self.tab_count))

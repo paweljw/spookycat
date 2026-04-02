@@ -197,9 +197,13 @@ def run(log_level):
         if not pressed or key not in ctrl.key_to_tab:
             return
         tab_index, _tab = ctrl.key_to_tab[key]
-        log.info("Switching to tab %d (key %d)", tab_index + 1, key)
-        ghostty.switch_tab(tab_index)
-        ctrl.set_active(key)
+        if key == ctrl.active_key and ghostty.is_focused():
+            log.info("Switching away from SpookyCat window (key %d)", key)
+            ghostty.switch_away()
+        else:
+            log.info("Switching to tab %d (key %d)", tab_index + 1, key)
+            ghostty.switch_tab(tab_index)
+            ctrl.set_active(key)
 
     deck.set_key_callback(on_key_change)
 
