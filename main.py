@@ -1,3 +1,4 @@
+import logging
 import sys
 import threading
 from pathlib import Path
@@ -10,6 +11,8 @@ from config import SpookyCatConfig, load_config, print_sample_config
 from ghostty import GhosttyController
 from hooks import StateServer, install_hooks, uninstall_hooks
 from poller import Poller, check_claude_process, invalidate_claude_cache
+
+log = logging.getLogger("spookycat")
 
 SPLASH_PATH = Path(__file__).parent / "splash.png"
 COLS, ROWS = 3, 2
@@ -77,7 +80,7 @@ class DeckController:
             if old != state:
                 self.claude_states[workspace_str] = state
                 key = self.ws_to_key.get(workspace_str, "?")
-                print(f"  [state] key {key}: {old or 'inactive'} → {state}")
+                log.debug("key %s: %s → %s", key, old or "inactive", state)
                 if self.ready:
                     self._redraw()
 
@@ -110,9 +113,9 @@ class DeckController:
 
         workspace_str = self._resolve_workspace(cwd_path)
         if not workspace_str:
-            print(f"  [hook] {event} from {cwd} — no matching workspace")
+            log.debug("hook %s from %s — no matching workspace", event, cwd)
             return
-        print(f"  [hook] {event} → {workspace_str}")
+        log.debug("hook %s → %s", event, workspace_str)
 
         if event == "prompt_submit":
             self.update_claude_state(workspace_str, "working")
@@ -138,24 +141,32 @@ class DeckController:
         return None
 
 
-def run():
+def run(log_level):
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     config = load_config()
 
     decks = DeviceManager().enumerate()
-    print(f"Found {len(decks)} Stream Deck(s)")
+    log.info("Found %d Stream Deck(s)", len(decks))
 
     if not decks:
-        print("No Stream Deck detected. Is it plugged in?")
+        log.error("No Stream Deck detected. Is it plugged in?")
         return
 
     deck = decks[0]
     deck.open()
     deck.reset()
 
-    print(f"  Deck type:    {deck.deck_type()}")
-    print(f"  Serial:       {deck.get_serial_number()}")
-    print(f"  FW version:   {deck.get_firmware_version()}")
-    print(f"  Key count:    {deck.key_count()}")
+    log.info(
+        "Deck: %s  Serial: %s  Keys: %d",
+        deck.deck_type(),
+        deck.get_serial_number(),
+        deck.key_count(),
+    )
 
     deck.set_brightness(60)
     show_splash(deck)
@@ -164,7 +175,7 @@ def run():
 
     server = StateServer(on_event=ctrl.on_hook_event)
     server.start()
-    print("  Socket server listening")
+    log.info("Socket server listening")
 
     poller = Poller(
         interval=config.poll_interval,
@@ -174,9 +185,9 @@ def run():
     poller.pre_cycle_hooks.append(invalidate_claude_cache)
     poller.register(check_claude_process)
     poller.start()
-    print("  Poller started")
+    log.info("Poller started (interval: %ds)", config.poll_interval)
 
-    print("Setting up Ghostty...")
+    log.info("Setting up Ghostty...")
     ghostty = GhosttyController(config.tabs)
 
     ctrl.ready = True
@@ -186,13 +197,13 @@ def run():
         if not pressed or key not in ctrl.key_to_tab:
             return
         tab_index, _tab = ctrl.key_to_tab[key]
-        print(f"Switching to tab {tab_index + 1} (key {key})")
+        log.info("Switching to tab %d (key %d)", tab_index + 1, key)
         ghostty.switch_tab(tab_index)
         ctrl.set_active(key)
 
     deck.set_key_callback(on_key_change)
 
-    print("\nSpookyCat ready! Ctrl+C to exit.")
+    log.info("SpookyCat ready! Ctrl+C to exit.")
 
     stop_event = threading.Event()
     try:
@@ -205,12 +216,22 @@ def run():
         ghostty.close()
         deck.reset()
         deck.close()
-        print("\nSpookyCat closed.")
+        log.info("SpookyCat closed.")
 
 
 def main():
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1]
+    log_level = "info"
+    args = sys.argv[1:]
+
+    filtered = []
+    for arg in args:
+        if arg.startswith("--log-level="):
+            log_level = arg.split("=", 1)[1]
+        else:
+            filtered.append(arg)
+
+    if filtered:
+        cmd = filtered[0]
         if cmd == "install-hooks":
             install_hooks()
         elif cmd == "uninstall-hooks":
@@ -219,11 +240,11 @@ def main():
             print_sample_config()
         else:
             print(f"Unknown command: {cmd}")
-            print("Usage: spookycat [install-hooks | uninstall-hooks | print-sample-config]")
+            print("Usage: spookycat [--log-level=debug] [install-hooks | uninstall-hooks | ...]")
             sys.exit(1)
         return
 
-    run()
+    run(log_level)
 
 
 if __name__ == "__main__":

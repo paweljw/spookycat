@@ -1,5 +1,8 @@
+import logging
 import subprocess
 import threading
+
+log = logging.getLogger("spookycat")
 
 
 class Poller:
@@ -57,7 +60,7 @@ def _get_claude_cwds():
 
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "claude"],
+            ["pgrep", "-x", "claude"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -75,7 +78,7 @@ def _get_claude_cwds():
             continue
         try:
             lsof = subprocess.run(
-                ["lsof", "-p", pid, "-d", "cwd", "-Fn"],
+                ["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -89,7 +92,7 @@ def _get_claude_cwds():
     with _claude_cwds_lock:
         _claude_cwds_cache = cwds
     if cwds:
-        print(f"  [poll] claude cwds: {cwds}")
+        log.debug("poll: claude cwds: %s", cwds)
     return cwds
 
 

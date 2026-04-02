@@ -1,9 +1,12 @@
 import contextlib
 import json
+import logging
 import shlex
 import subprocess
 import time
 from pathlib import Path
+
+log = logging.getLogger("spookycat")
 
 STATE_FILE = Path.home() / ".local" / "state" / "spookycat.json"
 
@@ -70,12 +73,12 @@ class GhosttyController:
         self.tab_count = len(tabs)
 
         if self._find_window():
-            print("  Re-attached to existing Ghostty window")
+            log.info("Re-attached to existing Ghostty window")
             self._save_state()
         else:
             state = self._load_state()
             if state:
-                print("  Saved window no longer exists, creating new one")
+                log.info("Saved window no longer exists, creating new one")
             self._create_window()
 
     def _load_state(self):
@@ -153,7 +156,7 @@ class GhosttyController:
 
         self.switch_tab(0)
         self._save_state()
-        print(f"  Created {self.tab_count} tabs in new Ghostty window")
+        log.info("Created %d tabs in new Ghostty window", self.tab_count)
 
     def switch_tab(self, index):
         if not 0 <= index < self.tab_count:
