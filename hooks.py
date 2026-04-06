@@ -143,8 +143,6 @@ def uninstall_hooks():
 
 
 class StateServer:
-    """Unix domain socket server receiving Claude state updates from hooks."""
-
     def __init__(self, on_event):
         self.on_event = on_event
         self._thread = None

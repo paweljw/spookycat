@@ -1,7 +1,10 @@
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 CONFIG_DIR = Path.home() / ".config" / "lol.pjw.spookycat"
 CONFIG_FILE = CONFIG_DIR / "spookycat.toml"
@@ -99,6 +102,10 @@ def load_config() -> SpookyCatConfig:
     poll_interval = settings.get("poll_interval", 5)
 
     colors_raw = raw.get("colors", {})
+    for name, value in colors_raw.items():
+        if not HEX_COLOR_RE.match(value):
+            print(f"Error: color '{name}' must be hex like #RRGGBB, got '{value}'")
+            sys.exit(1)
     colors = Colors(
         inactive=colors_raw.get("inactive", Colors.inactive),
         working=colors_raw.get("working", Colors.working),

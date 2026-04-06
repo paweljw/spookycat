@@ -10,6 +10,8 @@ log = logging.getLogger("spookycat")
 
 STATE_FILE = Path.home() / ".local" / "state" / "spookycat.json"
 
+# Ghostty exposes no window ID API, so we identify our window by matching
+# the exact number of tabs (radio buttons in the accessibility tab bar).
 FIND_WINDOW_SCRIPT = """
 tell application "System Events"
     tell process "Ghostty"
@@ -186,6 +188,7 @@ end tell""")
             return False
 
     def switch_away(self):
+        # key code 50 = backtick (Cmd+` cycles macOS windows)
         self._osascript('tell application "System Events" to key code 50 using command down')
 
     def close(self):

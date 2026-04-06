@@ -7,12 +7,6 @@ log = logging.getLogger("spookycat")
 
 
 class Poller:
-    """Runs registered callbacks per workspace on an interval.
-
-    Each callback: fn(workspace: Path) -> dict[str, Any] | None
-    Results are forwarded to on_update(workspace, key, value).
-    """
-
     def __init__(self, interval, workspaces, on_update):
         self.interval = interval
         self.workspaces = workspaces
@@ -44,7 +38,10 @@ class Poller:
                             for key, value in result.items():
                                 self.on_update(workspace, key, value)
                     except Exception:
-                        pass
+                        log.debug(
+                            "poll callback %s failed for %s",
+                            callback.__name__, workspace, exc_info=True,
+                        )
             self._stop.wait(self.interval)
 
 
@@ -53,63 +50,64 @@ _claude_cwds_lock = threading.Lock()
 
 
 def _get_claude_cwds():
-    """Get working directories of all Claude-related processes. Cached per poll cycle."""
     global _claude_cwds_cache
     with _claude_cwds_lock:
         if _claude_cwds_cache is not None:
             return _claude_cwds_cache
 
-    try:
-        result = subprocess.run(
-            ["pgrep", "-x", "claude"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return set()
-
-    if result.returncode != 0:
-        return set()
-
-    cwds = set()
-    for pid in result.stdout.strip().split("\n"):
-        pid = pid.strip()
-        if not pid:
-            continue
         try:
-            lsof = subprocess.run(
-                ["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"],
+            result = subprocess.run(
+                ["pgrep", "-x", "claude"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            for line in lsof.stdout.split("\n"):
-                if line.startswith("n/"):
-                    cwds.add(line[1:])
         except Exception:
-            pass
+            log.debug("pgrep failed", exc_info=True)
+            _claude_cwds_cache = set()
+            return _claude_cwds_cache
 
-    with _claude_cwds_lock:
+        if result.returncode != 0:
+            _claude_cwds_cache = set()
+            return _claude_cwds_cache
+
+        cwds = set()
+        for pid in result.stdout.strip().split("\n"):
+            pid = pid.strip()
+            if not pid:
+                continue
+            try:
+                # -d cwd = file descriptor for working dir, -Fn = name-only output
+                lsof = subprocess.run(
+                    ["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                for line in lsof.stdout.split("\n"):
+                    if line.startswith("n/"):
+                        cwds.add(line[1:])
+            except Exception:
+                log.debug("lsof failed for pid %s", pid, exc_info=True)
+
         _claude_cwds_cache = cwds
-    if cwds:
-        log.debug("poll: claude cwds: %s", cwds)
-    return cwds
+        if cwds:
+            log.debug("poll: claude cwds: %s", cwds)
+        return cwds
 
 
 def invalidate_claude_cache():
-    """Call at the start of each poll cycle to refresh the process cache."""
     global _claude_cwds_cache
     with _claude_cwds_lock:
         _claude_cwds_cache = None
 
 
+# Stream Deck Mini buttons fit ~7 chars in the subtitle line
 MAX_SUBTITLE = 7
 TICKET_RE = re.compile(r"^([a-zA-Z]+-\d+)")
 
 
 def _format_branch(branch):
-    """Format a git branch name into a short subtitle."""
     if "/" in branch:
         branch = branch.split("/", 1)[1]
 
@@ -123,7 +121,6 @@ def _format_branch(branch):
 
 
 def check_git_branch(workspace):
-    """Get the current git branch or short SHA for a workspace."""
     try:
         result = subprocess.run(
             ["git", "-C", str(workspace), "rev-parse", "--abbrev-ref", "HEAD"],
@@ -155,7 +152,6 @@ def check_git_branch(workspace):
 
 
 def check_claude_process(workspace):
-    """Check if a Claude process is running with cwd in this workspace."""
     cwds = _get_claude_cwds()
     workspace_str = str(workspace)
     for cwd in cwds:

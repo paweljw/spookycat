@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.ImageHelpers import PILHelper
 
-from config import SpookyCatConfig, load_config, print_sample_config
+from config import SpookyCatConfig, TabConfig, load_config, print_sample_config
 from ghostty import GhosttyController
 from hooks import StateServer, install_hooks, uninstall_hooks
 from poller import Poller, check_claude_process, check_git_branch, invalidate_claude_cache
@@ -19,10 +19,15 @@ from poller import Poller, check_claude_process, check_git_branch, invalidate_cl
 log = logging.getLogger("spookycat")
 
 SPLASH_PATH = Path(__file__).parent / "splash.png"
+# Stream Deck Mini physical layout
 COLS, ROWS = 3, 2
 
 FONT_REGULAR = "/System/Library/Fonts/Helvetica.ttc"
 FONT_BOLD_INDEX = 1
+DECK_BRIGHTNESS = 60
+# Vertical offsets for icon/subtitle text on 72x72 key images
+ICON_Y = 14
+SUBTITLE_Y = 52
 
 APP_DIR = Path.home() / "Applications" / "SpookyCat.app"
 
@@ -53,12 +58,13 @@ def render_key_image(deck, icon, subtitle="", bg_color="black", text_color="whit
 
     bbox = draw.textbbox((0, 0), icon, font=icon_font)
     icon_w = bbox[2] - bbox[0]
-    draw.text(((image.width - icon_w) // 2, 14), icon, font=icon_font, fill=text_color)
+    draw.text(((image.width - icon_w) // 2, ICON_Y), icon, font=icon_font, fill=text_color)
 
     if subtitle:
         bbox = draw.textbbox((0, 0), subtitle, font=sub_font)
         sub_w = bbox[2] - bbox[0]
-        draw.text(((image.width - sub_w) // 2, 52), subtitle, font=sub_font, fill=text_color)
+        x = (image.width - sub_w) // 2
+        draw.text((x, SUBTITLE_Y), subtitle, font=sub_font, fill=text_color)
 
     return image
 
@@ -148,13 +154,13 @@ class DeckController:
         try:
             self.deck = decks[0]
             self.deck.open()
-            self.deck.set_brightness(60)
+            self.deck.set_brightness(DECK_BRIGHTNESS)
             self.connected = True
             log.info("Stream Deck reconnected")
             self._redraw()
             self.deck.set_key_callback(self._key_callback)
         except Exception:
-            pass
+            log.debug("Stream Deck reconnect failed", exc_info=True)
 
     def on_hook_event(self, msg):
         cwd = msg.get("cwd", "")
@@ -207,8 +213,6 @@ class DeckController:
             self.claude_states.pop(old_ws, None)
             self.subtitles.pop(old_ws, None)
 
-            from config import TabConfig
-
             new_tab = TabConfig(key=key, icon=icon, workspace=workspace, init=[])
             self.config.tabs[idx] = new_tab
             self.key_to_tab[key] = (idx, new_tab)
@@ -238,7 +242,6 @@ def handle_command(msg, ctrl, poller):
 
 
 def send_command(msg):
-    """Send a command to the running SpookyCat instance via socket."""
     import json
     import socket as sock
 
@@ -284,7 +287,7 @@ def run(log_level):
         deck.key_count(),
     )
 
-    deck.set_brightness(60)
+    deck.set_brightness(DECK_BRIGHTNESS)
     show_splash(deck)
 
     ctrl = DeckController(deck, config)
@@ -346,7 +349,7 @@ def run(log_level):
                 ctrl.deck.set_brightness(0)
                 ctrl.deck.close()
             except Exception:
-                pass
+                log.debug("deck cleanup failed", exc_info=True)
         log.info("SpookyCat closed.")
 
     atexit.register(cleanup)
