@@ -2,6 +2,8 @@
 
 Custom Elgato Stream Deck Mini controller for managing multiple Claude Code workspaces in Ghostty.
 
+![](/demo.jpg)
+
 Each button maps to a Ghostty tab with a dedicated workspace. Buttons show the workspace icon, git branch info, and Claude's current state via color:
 
 - **Black** -- no Claude running
@@ -113,4 +115,4 @@ SpookyCat monitors Claude Code via two mechanisms:
 
 ## License
 
-MIT
+MIT, see [LICENSE](/LICENSE)
